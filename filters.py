@@ -28,12 +28,25 @@ def find_relocation_mentions(job: Job) -> list[str]:
     return found
 
 
+def has_negative_relocation(job: Job) -> bool:
+    """Return True if the job explicitly states no relocation/visa support."""
+    text = f"{job.title} {job.description}".lower()
+    for kw in config.RELOCATION_NEGATIVE_KEYWORDS:
+        if kw in text:
+            return True
+    return False
+
+
 def filter_jobs(jobs: list[Job]) -> list[Job]:
     """Keep only jobs that match title criteria AND mention relocation."""
     filtered: list[Job] = []
     for job in jobs:
         if not matches_title(job):
             logger.debug("Title mismatch — skipping: %s", job.title)
+            continue
+
+        if has_negative_relocation(job):
+            logger.debug("Negative relocation keyword found — skipping: %s", job.title)
             continue
 
         mentions = find_relocation_mentions(job)
