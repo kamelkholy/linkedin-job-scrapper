@@ -108,22 +108,34 @@ Results are saved in the `output/` directory:
 
 Each record includes: title, company, location, URL, posted date, matched relocation keywords, and a description excerpt.
 
-### Web Dashboard
+### Web Dashboard (Flask Server)
 
-To view the interactive dashboard, serve the output folder locally:
+The project includes a built-in Flask web server that serves the dashboard and exposes an API to trigger scrapes with custom parameters:
 
 ```bash
-cd output
-python -m http.server 8080
+python app.py
 ```
 
-Then open **http://localhost:8080** in your browser. The dashboard supports:
+Then open **http://localhost:5000** in your browser. The dashboard supports:
 
 - **Search/filter** by title, company, or location
 - **Filter by relocation type** (visa sponsorship, relocation package, etc.)
 - **Sort** by date, company, or title
 - **Remove/dismiss** jobs you're not interested in (persisted in browser storage)
 - **Restore** dismissed jobs with undo or the "restore all" button
+- **Start scrapes** directly from the UI with custom keywords, location, and page count
+- **Live progress** and log streaming while a scrape is running
+
+#### API Endpoints
+
+| Method | Endpoint | Description |
+|---|---|---|
+| `GET` | `/` | Serves the interactive dashboard |
+| `GET` | `/api/jobs` | Returns scraped jobs from the JSON output file |
+| `GET` | `/api/config` | Returns current scraper configuration |
+| `GET` | `/api/status` | Returns scrape progress, state, and recent logs |
+| `GET` | `/api/logs` | Returns captured log lines (supports `?since=N` for polling) |
+| `POST` | `/api/scrape` | Starts a new scrape (JSON body: `keywords`, `location`, `geoId`, `maxPages`, `noFilter`) |
 
 ---
 
@@ -205,6 +217,7 @@ RELOCATION_KEYWORDS = [
 ```
 LinkedIn Scrapper/
 ├── main.py              # CLI entry point
+├── app.py               # Flask web server & API
 ├── scraper.py           # Selenium-based LinkedIn scraper
 ├── filters.py           # Title/relocation filtering + CSV/JSON export
 ├── config.py            # All configurable settings
