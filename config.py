@@ -70,6 +70,7 @@ RELOCATION_NEGATIVE_KEYWORDS = [
     "without sponsorship",
     "no immigration support",
     "no work permit",
+    "relocation assistance will not be provided"
 ]
 
 # Job title keywords (at least one must match)
@@ -94,6 +95,7 @@ MAX_PAGES = 10              # Max pages to scrape (25 jobs per page)
 REQUEST_DELAY = (1, 3)      # Random delay range in seconds between requests
 HEADLESS_BROWSER = True      # Run browser in headless mode
 PAGE_LOAD_TIMEOUT = 30       # Seconds to wait for page load
+SKIP_DETAILS = False         # Skip fetching full job details/description pages
 
 # Output settings
 OUTPUT_DIR = "output"

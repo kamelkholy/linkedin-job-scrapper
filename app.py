@@ -76,6 +76,7 @@ def _run_scrape(params: dict):
         config.LOCATION = params.get("location", config.LOCATION)
         config.GEO_ID = params.get("geoId", config.GEO_ID)
         config.MAX_PAGES = int(params.get("maxPages", config.MAX_PAGES))
+        config.SKIP_DETAILS = params.get("skipDetails", False)
         no_filter = params.get("noFilter", False)
 
         with scrape_lock:

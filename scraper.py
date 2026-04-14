@@ -211,9 +211,15 @@ class LinkedInScraper:
             len(all_cards), len(relevant_cards),
         )
 
+        if config.SKIP_DETAILS:
+            logger.info("Skipping detail page fetches (SKIP_DETAILS=True).")
+
         for i, card in enumerate(relevant_cards, 1):
-            logger.info("[%d/%d] Fetching details for: %s", i, len(relevant_cards), card["title"])
-            description = self._fetch_job_description(card["url"]) if card["url"] else ""
+            if config.SKIP_DETAILS:
+                description = ""
+            else:
+                logger.info("[%d/%d] Fetching details for: %s", i, len(relevant_cards), card["title"])
+                description = self._fetch_job_description(card["url"]) if card["url"] else ""
 
             job = Job(
                 title=card["title"],

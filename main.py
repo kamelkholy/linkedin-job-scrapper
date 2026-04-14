@@ -31,6 +31,7 @@ def parse_args():
     parser.add_argument("--location", type=str, default=None, help="Override search location.")
     parser.add_argument("--pages", type=int, default=None, help="Override max pages to scrape.")
     parser.add_argument("--no-filter", action="store_true", help="Export all jobs without filtering.")
+    parser.add_argument("--skip-details", action="store_true", help="Skip fetching full job details/descriptions.")
     parser.add_argument("--headed", action="store_true", help="Run browser in headed (visible) mode.")
     return parser.parse_args()
 
@@ -49,6 +50,8 @@ def main():
         config.MAX_PAGES = args.pages
     if args.headed:
         config.HEADLESS_BROWSER = False
+    if args.skip_details:
+        config.SKIP_DETAILS = True
 
     logger.info("=== LinkedIn Job Scraper ===")
     logger.info("Keywords : %s", config.SEARCH_KEYWORDS)

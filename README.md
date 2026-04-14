@@ -92,6 +92,7 @@ python main.py --no-filter
 | `--location TEXT` | Override search location | Worldwide |
 | `--pages N` | Max listing pages to scrape (25 jobs/page) | `10` |
 | `--no-filter` | Export all scraped jobs without title/relocation filtering | Off |
+| `--skip-details` | Skip fetching full job details/descriptions (faster) | Off |
 | `--headed` | Show the browser window (useful for debugging) | Headless |
 
 ---
@@ -121,6 +122,7 @@ Then open **http://localhost:5000** in your browser. The dashboard supports:
 - **Search/filter** by title, company, or location
 - **Filter by relocation type** (visa sponsorship, relocation package, etc.)
 - **Sort** by date, company, or title
+- **Group by company** with collapsible sections
 - **Remove/dismiss** jobs you're not interested in (persisted in browser storage)
 - **Restore** dismissed jobs with undo or the "restore all" button
 - **Start scrapes** directly from the UI with custom keywords, location, and page count
@@ -135,7 +137,7 @@ Then open **http://localhost:5000** in your browser. The dashboard supports:
 | `GET` | `/api/config` | Returns current scraper configuration |
 | `GET` | `/api/status` | Returns scrape progress, state, and recent logs |
 | `GET` | `/api/logs` | Returns captured log lines (supports `?since=N` for polling) |
-| `POST` | `/api/scrape` | Starts a new scrape (JSON body: `keywords`, `location`, `geoId`, `maxPages`, `noFilter`) |
+| `POST` | `/api/scrape` | Starts a new scrape (JSON body: `keywords`, `location`, `geoId`, `maxPages`, `noFilter`, `skipDetails`) |
 
 ---
 
@@ -177,21 +179,11 @@ Add or remove entries to adjust what roles are included.
 
 ### Relocation Keywords
 
-The `RELOCATION_KEYWORDS` list defines what phrases to look for in job descriptions. A job must mention **at least one** of these to pass the filter:
+The `RELOCATION_KEYWORDS` list defines what phrases to look for in job descriptions. A job must mention **at least one** of these to pass the filter.
 
-```python
-RELOCATION_KEYWORDS = [
-    "relocation",
-    "relocation support",
-    "relocation assistance",
-    "relocation package",
-    "visa sponsorship",
-    "visa support",
-    "work permit",
-    "immigration support",
-    # ... see config.py for the full list
-]
-```
+The `RELOCATION_NEGATIVE_KEYWORDS` list defines phrases that indicate a job **does not** offer relocation or visa sponsorship (e.g., "no relocation", "does not sponsor", "unable to provide visa"). Jobs matching any negative keyword are excluded even if they also match a positive keyword.
+
+See [`config.py`](config.py) for the full lists.
 
 ### Scraping Settings
 
@@ -201,6 +193,7 @@ RELOCATION_KEYWORDS = [
 | `REQUEST_DELAY` | Random delay range (seconds) between requests | `(1, 3)` |
 | `HEADLESS_BROWSER` | Run Chrome in headless mode | `True` |
 | `PAGE_LOAD_TIMEOUT` | Seconds to wait for a page to load | `30` |
+| `SKIP_DETAILS` | Skip fetching full job detail pages | `False` |
 
 ### Output Settings
 
