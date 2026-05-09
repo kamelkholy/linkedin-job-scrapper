@@ -3,3 +3,7 @@ __pycache__/
 *.pyc
 venv/
 .env
+
+# Azure
+.azure/
+*.bicep.json
