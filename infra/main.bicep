@@ -31,6 +31,13 @@ param jobReplicaCount int = 1
 @description('Job timeout in seconds — the scrape can take a while across multiple locations.')
 param jobTimeoutSeconds int = 3600
 
+@description('Username for HTTP Basic Auth on the web UI. Leave empty along with authPassword to disable auth.')
+param authUsername string = 'admin'
+
+@description('Password for HTTP Basic Auth on the web UI. Stored as a Container Apps secret. Leave empty to disable auth.')
+@secure()
+param authPassword string = ''
+
 @description('Optional: tag for the resources.')
 param tags object = {
   app: 'linkedin-scraper'
@@ -203,6 +210,25 @@ var sharedEnv = [
   }
 ]
 
+// HTTP Basic Auth — only added when a password was supplied.
+var authEnabled = !empty(authPassword)
+var authSecrets = authEnabled ? [
+  {
+    name: 'auth-password'
+    value: authPassword
+  }
+] : []
+var authEnv = authEnabled ? [
+  {
+    name: 'AUTH_USERNAME'
+    value: authUsername
+  }
+  {
+    name: 'AUTH_PASSWORD'
+    secretRef: 'auth-password'
+  }
+] : []
+
 // ── Web UI (Container App) ───────────────────────────────────────────────
 resource webApp 'Microsoft.App/containerApps@2024-03-01' = {
   name: webAppName
@@ -218,6 +244,7 @@ resource webApp 'Microsoft.App/containerApps@2024-03-01' = {
     managedEnvironmentId: cae.id
     configuration: {
       activeRevisionsMode: 'Single'
+      secrets: authSecrets
       ingress: {
         external: true
         targetPort: 8000
@@ -249,7 +276,7 @@ resource webApp 'Microsoft.App/containerApps@2024-03-01' = {
               name: 'PORT'
               value: '8000'
             }
-          ])
+          ], authEnv)
         }
       ]
       scale: {

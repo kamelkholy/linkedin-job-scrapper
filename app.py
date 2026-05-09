@@ -11,11 +11,14 @@
 from __future__ import annotations
 
 import collections
+import hmac
 import logging
 import os
 import threading
+from base64 import b64decode
+from binascii import Error as BinasciiError
 
-from flask import Flask, jsonify, request, send_from_directory
+from flask import Flask, Response, jsonify, request, send_from_directory
 
 import config
 import db
@@ -24,6 +27,44 @@ from filters import export_csv, export_json
 from scraper import Job
 
 app = Flask(__name__, static_folder="output")
+
+# ── Auth ──────────────────────────────────────────────────────────────────
+# HTTP Basic Auth gated on AUTH_USERNAME / AUTH_PASSWORD env vars.
+# If either is empty, auth is disabled (local dev).
+_AUTH_USER = os.environ.get("AUTH_USERNAME", "").strip()
+_AUTH_PASS = os.environ.get("AUTH_PASSWORD", "")
+_AUTH_REALM = os.environ.get("AUTH_REALM", "LinkedIn Scraper")
+_AUTH_ENABLED = bool(_AUTH_USER and _AUTH_PASS)
+
+
+def _credentials_match(supplied_user: str, supplied_pass: str) -> bool:
+    # Constant-time compare on both fields to avoid timing oracles.
+    user_ok = hmac.compare_digest(supplied_user.encode("utf-8"), _AUTH_USER.encode("utf-8"))
+    pass_ok = hmac.compare_digest(supplied_pass.encode("utf-8"), _AUTH_PASS.encode("utf-8"))
+    return user_ok and pass_ok
+
+
+def _unauthorized() -> Response:
+    resp = Response("Authentication required.", status=401, mimetype="text/plain")
+    resp.headers["WWW-Authenticate"] = f'Basic realm="{_AUTH_REALM}", charset="UTF-8"'
+    return resp
+
+
+@app.before_request
+def _require_basic_auth():
+    if not _AUTH_ENABLED:
+        return None
+    header = request.headers.get("Authorization", "")
+    if not header.startswith("Basic "):
+        return _unauthorized()
+    try:
+        decoded = b64decode(header[6:].strip(), validate=True).decode("utf-8")
+    except (BinasciiError, UnicodeDecodeError):
+        return _unauthorized()
+    user, sep, password = decoded.partition(":")
+    if not sep or not _credentials_match(user, password):
+        return _unauthorized()
+    return None
 
 # ── Log capture ─────────────────────────────────────────────────────────────
 LOG_BUFFER_SIZE = 500

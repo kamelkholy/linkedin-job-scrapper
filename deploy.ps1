@@ -36,6 +36,13 @@
 .PARAMETER TriggerJob
     After deploy, kick off the daily scrape Job once so you can watch logs.
 
+.PARAMETER AuthUsername
+    Username for HTTP Basic Auth on the web UI. Default: admin. Ignored when AuthPassword is empty.
+
+.PARAMETER AuthPassword
+    Password for HTTP Basic Auth on the web UI (stored as a Container Apps secret).
+    If omitted, auth is left disabled. Pass an empty string to keep current value on redeploy.
+
 .EXAMPLE
     ./deploy.ps1 -Location westeurope -Prefix lkdscraper -TriggerJob
 #>
@@ -49,7 +56,9 @@ param(
     [string]$ImageTag = (Get-Date -Format 'yyyyMMdd-HHmm'),
     [string]$CronExpression = '0 6 * * *',
     [switch]$SkipBuild,
-    [switch]$TriggerJob
+    [switch]$TriggerJob,
+    [string]$AuthUsername = 'admin',
+    [string]$AuthPassword
 )
 
 $ErrorActionPreference = 'Stop'
@@ -158,7 +167,7 @@ Invoke-Az deployment group create `
     --resource-group $ResourceGroup `
     --name $deploymentName `
     --template-file $bicepPath `
-    --parameters prefix=$Prefix location=$Location imageTag=$ImageTag cronExpression="$CronExpression" acrName=$acrName `
+    --parameters prefix=$Prefix location=$Location imageTag=$ImageTag cronExpression="$CronExpression" acrName=$acrName authUsername=$AuthUsername authPassword=$AuthPassword `
     --output none
 
 $outputs = (az deployment group show --resource-group $ResourceGroup --name $deploymentName --query properties.outputs --output json) | ConvertFrom-Json
@@ -182,6 +191,11 @@ Write-Step "Done"
 Write-Host "Web UI       : $webUrl"
 Write-Host "Cosmos       : $($outputs.cosmosEndpoint.value)"
 Write-Host "Daily cron   : $CronExpression (UTC)"
+if ($AuthPassword) {
+    Write-Host "Auth         : enabled (user: $AuthUsername)"
+} else {
+    Write-Host "Auth         : DISABLED (pass -AuthPassword '...' to enable Basic Auth)"
+}
 Write-Host ""
 Write-Host "Useful follow-ups:"
 Write-Host "  az containerapp job start             -n $jobName -g $ResourceGroup"
