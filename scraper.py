@@ -1,6 +1,7 @@
 """LinkedIn Job Scraper — fetches job listings from LinkedIn public job search."""
 
 import logging
+import os
 import random
 import re
 import time
@@ -47,7 +48,21 @@ class LinkedInScraper:
 
     BASE_URL = "https://www.linkedin.com/jobs/search/"
 
-    def __init__(self):
+    def __init__(
+        self,
+        keywords: str | None = None,
+        location: str | None = None,
+        geo_id: str | None = None,
+        max_pages: int | None = None,
+        skip_details: bool | None = None,
+    ):
+        # Per-instance overrides — fall back to module config defaults.
+        self.keywords = keywords if keywords is not None else config.SEARCH_KEYWORDS
+        self.location = location if location is not None else config.LOCATION
+        self.geo_id = geo_id if geo_id is not None else config.GEO_ID
+        self.max_pages = max_pages if max_pages is not None else config.MAX_PAGES
+        self.skip_details = skip_details if skip_details is not None else config.SKIP_DETAILS
+
         self.driver = self._init_driver()
         self.jobs: list[Job] = []
 
@@ -57,26 +72,40 @@ class LinkedInScraper:
             opts.add_argument("--headless=new")
         opts.add_argument("--no-sandbox")
         opts.add_argument("--disable-dev-shm-usage")
+        opts.add_argument("--disable-gpu")
         opts.add_argument("--disable-blink-features=AutomationControlled")
         opts.add_argument(
             "user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
             "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
         )
         opts.add_experimental_option("excludeSwitches", ["enable-automation"])
-        # Selenium 4.6+ has a built-in driver manager — no need for webdriver-manager
-        driver = webdriver.Chrome(options=opts)
+
+        # Container-friendly: respect CHROME_BIN and CHROMEDRIVER env vars
+        # (set by the Dockerfile to /usr/bin/chromium and /usr/bin/chromedriver).
+        chrome_bin = os.environ.get("CHROME_BIN")
+        if chrome_bin:
+            opts.binary_location = chrome_bin
+
+        chromedriver = os.environ.get("CHROMEDRIVER")
+        if chromedriver:
+            service = Service(executable_path=chromedriver)
+            driver = webdriver.Chrome(service=service, options=opts)
+        else:
+            # Selenium 4.6+ has a built-in driver manager — no need for webdriver-manager
+            driver = webdriver.Chrome(options=opts)
+
         driver.set_page_load_timeout(config.PAGE_LOAD_TIMEOUT)
         return driver
 
     def _build_search_url(self, start: int = 0) -> str:
         params: dict[str, str] = {
-            "keywords": config.SEARCH_KEYWORDS,
+            "keywords": self.keywords,
             "start": str(start),
         }
-        if config.LOCATION:
-            params["location"] = config.LOCATION
-        if config.GEO_ID:
-            params["geoId"] = config.GEO_ID
+        if self.location:
+            params["location"] = self.location
+        if self.geo_id:
+            params["geoId"] = self.geo_id
         return f"{self.BASE_URL}?{urlencode(params, quote_via=quote_plus)}"
 
     def _random_delay(self):
@@ -171,7 +200,7 @@ class LinkedInScraper:
         all_cards: list[dict] = []
         seen_urls: set[str] = set()
 
-        for page in range(config.MAX_PAGES):
+        for page in range(self.max_pages):
             start = page * 25
             url = self._build_search_url(start)
             logger.info("Fetching listing page %d — %s", page + 1, url)
@@ -211,11 +240,11 @@ class LinkedInScraper:
             len(all_cards), len(relevant_cards),
         )
 
-        if config.SKIP_DETAILS:
-            logger.info("Skipping detail page fetches (SKIP_DETAILS=True).")
+        if self.skip_details:
+            logger.info("Skipping detail page fetches (skip_details=True).")
 
         for i, card in enumerate(relevant_cards, 1):
-            if config.SKIP_DETAILS:
+            if self.skip_details:
                 description = ""
             else:
                 logger.info("[%d/%d] Fetching details for: %s", i, len(relevant_cards), card["title"])
