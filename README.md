@@ -1,19 +1,18 @@
 # LinkedIn Job Scraper — Senior SWE + Relocation
 
-Scrapes LinkedIn's public job search for **senior software engineering** positions that mention **relocation support**, visa sponsorship, or similar benefits. Results are exported to CSV/JSON and can be viewed in an interactive web dashboard.
+Scrapes LinkedIn's public job search for **senior software engineering** positions that mention **relocation support**, visa sponsorship, or similar benefits.
+
+The Flask web server runs a **daily background job** that scrapes a configurable list of locations, deduplicates jobs across runs, and stores everything in a **TinyDB** NoSQL database. You manage the saved jobs (apply / dismiss / archive / notes), the search settings, and the daily schedule directly from the web dashboard.
 
 ---
 
 ## How It Works
 
-1. **Selenium** opens LinkedIn's public job search pages (no login required)
-2. Scrolls through listing pages and extracts job cards (title, company, location, URL)
-3. Pre-filters by job title to skip irrelevant listings
-4. Visits each matching job's detail page to extract the full description
-5. Filters for jobs that mention relocation/visa keywords in the description
-6. Deduplicates results by URL
-7. Exports matches to `output/linkedin_jobs.csv` and `output/linkedin_jobs.json`
-8. Results can be viewed in the built-in web dashboard (`output/index.html`)
+1. **Daily background job** (APScheduler) runs at the time you choose, rotating through every location in your settings list.
+2. For each location, **Selenium** opens LinkedIn's public job search pages (no login required), extracts cards, fetches descriptions, and applies the title/relocation filter.
+3. Matching jobs are **upserted** into a TinyDB document store, keyed by URL — re-scraping the same job updates `last_seen` and adds the location to its `search_locations` list, so a job is never duplicated.
+4. New jobs are flagged ✨ in the UI; jobs you dismiss / mark as applied / archive update status in the DB and persist across browsers.
+5. Optional `output/linkedin_jobs.csv` + `output/linkedin_jobs.json` exports are still available on demand.
 
 ---
 
@@ -43,165 +42,95 @@ pip install -r requirements.txt
 
 ---
 
-## Running the Scraper
-
-### Basic usage (worldwide search, default settings)
-
-```bash
-python main.py
-```
-
-### Search a specific location
-
-```bash
-python main.py --location "Ireland"
-python main.py --location "United Kingdom"
-python main.py --location "Germany"
-```
-
-### Custom search keywords
-
-```bash
-python main.py --keywords "senior backend engineer relocation visa"
-```
-
-### Control how many pages to scrape (25 jobs per page)
-
-```bash
-python main.py --pages 20
-```
-
-### Combine multiple options
-
-```bash
-python main.py --location "Ireland" --pages 25 --headed -v
-```
-
-### Export all jobs without filtering
-
-```bash
-python main.py --no-filter
-```
-
-### CLI Options Reference
-
-| Flag | Description | Default |
-|---|---|---|
-| `-v`, `--verbose` | Enable debug-level logging | Off |
-| `--keywords TEXT` | Override search keywords | `"senior software engineer relocation"` |
-| `--location TEXT` | Override search location | Worldwide |
-| `--pages N` | Max listing pages to scrape (25 jobs/page) | `10` |
-| `--no-filter` | Export all scraped jobs without title/relocation filtering | Off |
-| `--skip-details` | Skip fetching full job details/descriptions (faster) | Off |
-| `--headed` | Show the browser window (useful for debugging) | Headless |
-
----
-
-## Viewing Results
-
-Results are saved in the `output/` directory:
-
-| File | Description |
-|---|---|
-| `linkedin_jobs.csv` | Spreadsheet-friendly format |
-| `linkedin_jobs.json` | Structured data with full details |
-| `index.html` | Interactive web dashboard |
-
-Each record includes: title, company, location, URL, posted date, matched relocation keywords, and a description excerpt.
-
-### Web Dashboard (Flask Server)
-
-The project includes a built-in Flask web server that serves the dashboard and exposes an API to trigger scrapes with custom parameters:
+## Running the Web Server (recommended)
 
 ```bash
 python app.py
 ```
 
-Then open **http://localhost:5000** in your browser. The dashboard supports:
+Then open **http://localhost:5000**. On first launch the server:
 
-- **Search/filter** by title, company, or location
-- **Filter by relocation type** (visa sponsorship, relocation package, etc.)
-- **Sort** by date, company, or title
-- **Group by company** with collapsible sections
-- **Remove/dismiss** jobs you're not interested in (persisted in browser storage)
-- **Restore** dismissed jobs with undo or the "restore all" button
-- **Start scrapes** directly from the UI with custom keywords, location, and page count
-- **Live progress** and log streaming while a scrape is running
+- Creates the database file at `output/jobs_db.json`
+- Seeds default settings from `config.py` (keywords, locations, schedule)
+- Migrates any pre-existing `output/linkedin_jobs.json` into the DB
+- Starts the **APScheduler** background scheduler — the daily scrape will fire at the configured time (default `06:00 UTC`)
 
-#### API Endpoints
+The dashboard shows a banner with the scheduler state and the next scheduled run. Open **Settings & Scrape** to:
+
+- Edit **search keywords**
+- Add / remove **locations** (the daily job rotates through every entry)
+- Set the **daily schedule** (hour / minute, UTC) or disable it
+- Tune `max pages per location`, skip-details, skip-filtering
+- Save settings without running, or **Run Scrape Now** for an immediate multi-location run
+
+### Job management (server-side, persisted in TinyDB)
+
+- ☐ **Mark Applied** — toggles `status: "applied"` and stamps `applied_at`
+- ✕ **Dismiss** — sets `status: "dismissed"` (with an undo bar to restore)
+- The **Active jobs / All / New / Applied / Dismissed / Archived** filter swaps the DB query
+
+### API Endpoints
 
 | Method | Endpoint | Description |
 |---|---|---|
-| `GET` | `/` | Serves the interactive dashboard |
-| `GET` | `/api/jobs` | Returns scraped jobs from the JSON output file |
-| `GET` | `/api/config` | Returns current scraper configuration |
-| `GET` | `/api/status` | Returns scrape progress, state, and recent logs |
-| `GET` | `/api/logs` | Returns captured log lines (supports `?since=N` for polling) |
-| `POST` | `/api/scrape` | Starts a new scrape (JSON body: `keywords`, `location`, `geoId`, `maxPages`, `noFilter`, `skipDetails`) |
+| `GET`  | `/`                       | Serves the dashboard |
+| `GET`  | `/api/jobs?status=&search=&location=&limit=` | List jobs from the DB |
+| `GET`  | `/api/jobs/stats`         | Counts: total, by_status, companies, locations |
+| `POST` | `/api/jobs/status`        | Body: `{url, status, notes?}` — set `new`/`applied`/`dismissed`/`archived` |
+| `POST` | `/api/jobs/notes`         | Body: `{url, notes}` |
+| `POST` | `/api/jobs/delete`        | Body: `{url}` — hard delete |
+| `POST` | `/api/jobs/export`        | Re-export current DB to `output/linkedin_jobs.csv` + `.json` |
+| `GET`  | `/api/settings`           | Read runtime settings |
+| `POST` | `/api/settings`           | Update settings (any subset of fields) |
+| `GET`  | `/api/schedule`           | `{enabled, next_run, hour, minute}` |
+| `GET`  | `/api/runs?limit=20`      | Past background-run summaries |
+| `POST` | `/api/scrape`             | Trigger an immediate multi-location scrape |
+| `GET`  | `/api/status`             | Live progress, current location, recent logs |
+| `GET`  | `/api/logs?since=N`       | Captured log lines since index N |
+
+---
+
+## Running the CLI (one-off, no server)
+
+The original CLI still works for ad-hoc single-location runs that export to CSV/JSON only (it does **not** write to the DB):
+
+```bash
+python main.py --location "Ireland" --pages 10
+python main.py --keywords "senior backend engineer relocation"
+python main.py --no-filter --skip-details
+```
+
+| Flag | Description | Default |
+|---|---|---|
+| `-v`, `--verbose` | Enable debug-level logging | Off |
+| `--keywords TEXT` | Override search keywords | from `config.py` |
+| `--location TEXT` | Override search location | Worldwide |
+| `--pages N` | Max listing pages to scrape (25 jobs/page) | `10` |
+| `--no-filter` | Export all scraped jobs without filtering | Off |
+| `--skip-details` | Skip fetching full job details/descriptions | Off |
+| `--headed` | Show the browser window | Headless |
 
 ---
 
 ## Configuration
 
-All settings live in [`config.py`](config.py). Edit this file to customize the scraper's behavior without CLI flags.
+Default values live in [`config.py`](config.py); they are used to **seed** the DB on first launch. After that, edit settings from the web UI — those values live in the `settings` table of the TinyDB file and are what the daily job reads.
 
-### Search Parameters
+### Initial defaults
 
-| Setting | Description | Default |
+| Setting (`config.py`) | Description | Default |
 |---|---|---|
-| `SEARCH_KEYWORDS` | LinkedIn search query string | `"senior software engineer relocation"` |
-| `LOCATION` | Target geography (leave empty for worldwide) | `""` |
-| `GEO_ID` | LinkedIn geo ID for precise targeting (e.g., `"101165590"` for UK) | `""` |
+| `SEARCH_KEYWORDS` | LinkedIn search query | `"senior software engineer relocation"` |
+| `LOCATIONS` | List of locations rotated by the daily job | `["Ireland", "United Kingdom", "Germany", "Netherlands", "European Union"]` |
+| `SCHEDULE_HOUR` / `SCHEDULE_MINUTE` | Daily run time (UTC) | `06:00` |
+| `DB_PATH` | TinyDB file path | `"output/jobs_db.json"` |
+| `MAX_PAGES` | Pages per location | `10` |
+| `HEADLESS_BROWSER` | Run Chrome headless | `True` |
+| `REQUEST_DELAY` | Random delay range (seconds) | `(1, 3)` |
 
-### Title Keywords
+### Title & relocation keywords
 
-The `TITLE_KEYWORDS` list controls which job titles are considered relevant. A job must contain **at least one** of these in its title to pass the filter:
-
-```python
-TITLE_KEYWORDS = [
-    "senior software engineer",
-    "senior software developer",
-    "sr. software engineer",
-    "sr software engineer",
-    "staff software engineer",
-    "lead software engineer",
-    "senior backend engineer",
-    "senior frontend engineer",
-    "senior full stack engineer",
-    "senior fullstack engineer",
-    "senior full-stack engineer",
-    "senior swe",
-    "senior developer",
-]
-```
-
-Add or remove entries to adjust what roles are included.
-
-### Relocation Keywords
-
-The `RELOCATION_KEYWORDS` list defines what phrases to look for in job descriptions. A job must mention **at least one** of these to pass the filter.
-
-The `RELOCATION_NEGATIVE_KEYWORDS` list defines phrases that indicate a job **does not** offer relocation or visa sponsorship (e.g., "no relocation", "does not sponsor", "unable to provide visa"). Jobs matching any negative keyword are excluded even if they also match a positive keyword.
-
-See [`config.py`](config.py) for the full lists.
-
-### Scraping Settings
-
-| Setting | Description | Default |
-|---|---|---|
-| `MAX_PAGES` | Maximum listing pages to scrape | `10` |
-| `REQUEST_DELAY` | Random delay range (seconds) between requests | `(1, 3)` |
-| `HEADLESS_BROWSER` | Run Chrome in headless mode | `True` |
-| `PAGE_LOAD_TIMEOUT` | Seconds to wait for a page to load | `30` |
-| `SKIP_DETAILS` | Skip fetching full job detail pages | `False` |
-
-### Output Settings
-
-| Setting | Description | Default |
-|---|---|---|
-| `OUTPUT_DIR` | Directory for exported files | `"output"` |
-| `OUTPUT_CSV` | CSV filename | `"linkedin_jobs.csv"` |
-| `OUTPUT_JSON` | JSON filename | `"linkedin_jobs.json"` |
+`TITLE_KEYWORDS`, `RELOCATION_KEYWORDS`, and `RELOCATION_NEGATIVE_KEYWORDS` in `config.py` are still authoritative — they're consumed at filter-time and not stored in the DB. Edit `config.py` and restart to change them.
 
 ---
 
@@ -209,18 +138,21 @@ See [`config.py`](config.py) for the full lists.
 
 ```
 LinkedIn Scrapper/
-├── main.py              # CLI entry point
-├── app.py               # Flask web server & API
+├── main.py              # CLI entry point (no DB)
+├── app.py               # Flask server, API, bootstraps DB + scheduler
+├── scheduler.py         # APScheduler daily job + multi-location runner
+├── db.py                # TinyDB repository (jobs, settings, runs)
 ├── scraper.py           # Selenium-based LinkedIn scraper
 ├── filters.py           # Title/relocation filtering + CSV/JSON export
-├── config.py            # All configurable settings
-├── requirements.txt     # Python dependencies
+├── config.py            # Default settings (seed values)
+├── index.html           # Web dashboard
+├── requirements.txt     # Python dependencies (incl. tinydb, apscheduler)
 ├── .gitignore
 ├── README.md
 └── output/
-    ├── linkedin_jobs.csv
-    ├── linkedin_jobs.json
-    └── index.html       # Interactive web dashboard
+    ├── jobs_db.json         # ← TinyDB NoSQL database (jobs / settings / runs)
+    ├── linkedin_jobs.csv    # Optional export
+    └── linkedin_jobs.json   # Optional export
 ```
 
 ---
