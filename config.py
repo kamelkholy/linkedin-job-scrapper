@@ -1,9 +1,32 @@
-"""Configuration for the LinkedIn Job Scraper."""
+"""Configuration for the LinkedIn Job Scraper.
+
+Defaults below seed the database on first launch. After that, runtime
+settings live in the TinyDB `settings` table and can be edited from the
+web UI (the daily background job reads from the DB, not from this file).
+"""
 
 # Search parameters
 SEARCH_KEYWORDS = "senior software engineer relocation"
 LOCATION = ""  # e.g., "Germany", "Netherlands", "Europe" — leave empty for worldwide
 GEO_ID = ""    # LinkedIn geo ID (optional, e.g., "101165590" for United Kingdom)
+
+# Default list of locations the daily background job rotates through.
+# Each entry can be a string (location name) or a dict with keys:
+#   { "location": "...", "geoId": "..." }
+LOCATIONS: list = [
+    "Ireland",
+    "United Kingdom",
+    "Germany",
+    "Netherlands",
+    "European Union",
+]
+
+# Daily schedule (24h, server local time)
+SCHEDULE_HOUR = 6
+SCHEDULE_MINUTE = 0
+
+# Database
+DB_PATH = "output/jobs_db.json"
 
 # Relocation-related keywords to look for in job descriptions
 RELOCATION_KEYWORDS = [
