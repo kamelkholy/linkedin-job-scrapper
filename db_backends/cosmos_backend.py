@@ -273,11 +273,15 @@ class CosmosBackend:
     # ── Companies (for remote-jobs feature) ─────────────────────────────
 
     def list_companies(self) -> list[dict]:
-        items = list(self._companies.query_items(
-            query="SELECT * FROM c ORDER BY LOWER(c.name)",
-            enable_cross_partition_query=True,
-        ))
-        return items
+        try:
+            items = list(self._companies.query_items(
+                query="SELECT * FROM c ORDER BY LOWER(c.name)",
+                enable_cross_partition_query=True,
+            ))
+            return items
+        except exceptions.CosmosResourceNotFoundError:
+            logger.warning("companies container missing — returning empty list.")
+            return []
 
     def add_company(self, doc: dict) -> dict:
         key = (doc.get("slug") or doc.get("name") or "").strip().lower()
@@ -286,6 +290,9 @@ class CosmosBackend:
         try:
             existing = self._companies.read_item(item=key, partition_key=key)
         except exceptions.CosmosResourceNotFoundError:
+            existing = None
+        except exceptions.CosmosHttpResponseError as exc:
+            logger.warning("add_company: read failed (%s) — treating as missing.", exc)
             existing = None
         if existing:
             merged = dict(existing)
@@ -318,8 +325,12 @@ class CosmosBackend:
             return False
 
     def companies_count(self) -> int:
-        items = list(self._companies.query_items(
-            query="SELECT VALUE COUNT(1) FROM c",
-            enable_cross_partition_query=True,
-        ))
-        return int(items[0]) if items else 0
+        try:
+            items = list(self._companies.query_items(
+                query="SELECT VALUE COUNT(1) FROM c",
+                enable_cross_partition_query=True,
+            ))
+            return int(items[0]) if items else 0
+        except exceptions.CosmosResourceNotFoundError:
+            logger.warning("companies container missing — reporting count=0.")
+            return 0

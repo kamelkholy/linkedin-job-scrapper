@@ -229,8 +229,17 @@ def remove_company(key: str) -> bool:
 
 
 def seed_default_companies() -> int:
-    """Populate the companies table with a curated remote-friendly list (idempotent)."""
-    if _b().companies_count() > 0:
+    """Populate the companies table with a curated remote-friendly list (idempotent).
+
+    Never raises — bootstrap must succeed even when the backing container
+    isn't reachable yet (e.g. Cosmos data-plane permissions still
+    propagating after a fresh deploy).
+    """
+    try:
+        if _b().companies_count() > 0:
+            return 0
+    except Exception as exc:  # pragma: no cover
+        logger.warning("seed_default_companies: count failed, skipping seed (%s)", exc)
         return 0
     from remote_companies import DEFAULT_REMOTE_COMPANIES
     added = 0

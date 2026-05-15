@@ -165,6 +165,20 @@ resource runsContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/conta
   }
 }
 
+resource companiesContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers@2024-05-15' = {
+  parent: cosmosDb
+  name: 'companies'
+  properties: {
+    resource: {
+      id: 'companies'
+      partitionKey: {
+        paths: [ '/id' ]
+        kind: 'Hash'
+      }
+    }
+  }
+}
+
 // Cosmos DB built-in data plane RBAC: Data Contributor.
 // Grants the identity full data-plane access to this Cosmos account.
 resource cosmosDataContributor 'Microsoft.DocumentDB/databaseAccounts/sqlRoleAssignments@2024-05-15' = {
