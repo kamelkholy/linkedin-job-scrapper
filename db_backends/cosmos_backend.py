@@ -275,9 +275,10 @@ class CosmosBackend:
     def list_companies(self) -> list[dict]:
         try:
             items = list(self._companies.query_items(
-                query="SELECT * FROM c ORDER BY LOWER(c.name)",
+                query="SELECT * FROM c",
                 enable_cross_partition_query=True,
             ))
+            items.sort(key=lambda d: (d.get("name") or d.get("slug") or "").lower())
             return items
         except exceptions.CosmosResourceNotFoundError:
             logger.warning("companies container missing — returning empty list.")
