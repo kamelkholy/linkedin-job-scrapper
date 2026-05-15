@@ -120,7 +120,14 @@ Write-Host ("Cron         : $CronExpression")
 
 # ── Resource group ──────────────────────────────────────────────────────
 Write-Step "Ensuring resource group '$ResourceGroup' in $Location"
-Invoke-Az group create --name $ResourceGroup --location $Location --output none
+$existingRg = az group show --name $ResourceGroup --query location -o tsv 2>$null
+if ($existingRg) {
+    if ($existingRg -ne $Location) {
+        Write-Host "Resource group already exists in '$existingRg' (resources can still be deployed to '$Location')." -ForegroundColor Yellow
+    }
+} else {
+    Invoke-Az group create --name $ResourceGroup --location $Location --output none
+}
 
 # ── ACR (created before Bicep so the image build can target it) ─────────
 # Derive a deterministic ACR name from the RG id (lowercase alphanumeric, ≤50 chars).

@@ -67,6 +67,7 @@ class CosmosBackend:
         self._jobs = self._ensure_container("jobs", PartitionKey(path="/source"))
         self._settings = self._ensure_container("settings", PartitionKey(path="/id"))
         self._runs = self._ensure_container("runs", PartitionKey(path="/yearMonth"))
+        self._companies = self._ensure_container("companies", PartitionKey(path="/id"))
 
     def _ensure_container(self, name: str, pk: PartitionKey):
         try:
@@ -136,10 +137,13 @@ class CosmosBackend:
 
         return {"new": new_count, "updated": updated_count, "total_seen": total}
 
-    def list_jobs(self, status, search, location, limit) -> list[dict]:
+    def list_jobs(self, status, search, location, limit, source=None) -> list[dict]:
         clauses: list[str] = []
         params: list[dict] = []
 
+        if source:
+            clauses.append("c.source = @source")
+            params.append({"name": "@source", "value": source})
         if status:
             if status == "active":
                 clauses.append("c.status NOT IN ('dismissed','archived')")
@@ -202,12 +206,19 @@ class CosmosBackend:
         self._jobs.delete_item(item=existing["id"], partition_key=existing.get("source", "linkedin"))
         return True
 
-    def stats(self) -> dict:
+    def stats(self, source=None) -> dict:
         # Single aggregate query keeps RU usage low.
-        items = list(self._jobs.query_items(
-            query="SELECT c.status, c.company, c.location FROM c",
-            enable_cross_partition_query=True,
-        ))
+        if source:
+            items = list(self._jobs.query_items(
+                query="SELECT c.status, c.company, c.location FROM c WHERE c.source = @source",
+                parameters=[{"name": "@source", "value": source}],
+                enable_cross_partition_query=True,
+            ))
+        else:
+            items = list(self._jobs.query_items(
+                query="SELECT c.status, c.company, c.location FROM c",
+                enable_cross_partition_query=True,
+            ))
         by_status: dict[str, int] = {}
         companies: set[str] = set()
         locations: set[str] = set()
@@ -254,6 +265,60 @@ class CosmosBackend:
 
     def jobs_count(self) -> int:
         items = list(self._jobs.query_items(
+            query="SELECT VALUE COUNT(1) FROM c",
+            enable_cross_partition_query=True,
+        ))
+        return int(items[0]) if items else 0
+
+    # ── Companies (for remote-jobs feature) ─────────────────────────────
+
+    def list_companies(self) -> list[dict]:
+        items = list(self._companies.query_items(
+            query="SELECT * FROM c ORDER BY LOWER(c.name)",
+            enable_cross_partition_query=True,
+        ))
+        return items
+
+    def add_company(self, doc: dict) -> dict:
+        key = (doc.get("slug") or doc.get("name") or "").strip().lower()
+        if not key:
+            raise ValueError("company name is required")
+        try:
+            existing = self._companies.read_item(item=key, partition_key=key)
+        except exceptions.CosmosResourceNotFoundError:
+            existing = None
+        if existing:
+            merged = dict(existing)
+            merged.update({k: v for k, v in doc.items() if v not in (None, "")})
+            self._companies.replace_item(item=key, body=merged)
+            return merged
+        body = dict(doc)
+        body["id"] = key
+        body["key"] = key
+        body.setdefault("enabled", True)
+        body.setdefault("added_at", _utcnow())
+        self._companies.create_item(body=body)
+        return body
+
+    def update_company(self, key: str, patch: dict) -> dict | None:
+        try:
+            existing = self._companies.read_item(item=key, partition_key=key)
+        except exceptions.CosmosResourceNotFoundError:
+            return None
+        merged = dict(existing)
+        merged.update(patch)
+        self._companies.replace_item(item=key, body=merged)
+        return merged
+
+    def remove_company(self, key: str) -> bool:
+        try:
+            self._companies.delete_item(item=key, partition_key=key)
+            return True
+        except exceptions.CosmosResourceNotFoundError:
+            return False
+
+    def companies_count(self) -> int:
+        items = list(self._companies.query_items(
             query="SELECT VALUE COUNT(1) FROM c",
             enable_cross_partition_query=True,
         ))

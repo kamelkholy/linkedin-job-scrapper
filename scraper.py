@@ -55,6 +55,8 @@ class LinkedInScraper:
         geo_id: str | None = None,
         max_pages: int | None = None,
         skip_details: bool | None = None,
+        title_keywords: list[str] | None = None,
+        extra_params: dict | None = None,
     ):
         # Per-instance overrides — fall back to module config defaults.
         self.keywords = keywords if keywords is not None else config.SEARCH_KEYWORDS
@@ -62,6 +64,11 @@ class LinkedInScraper:
         self.geo_id = geo_id if geo_id is not None else config.GEO_ID
         self.max_pages = max_pages if max_pages is not None else config.MAX_PAGES
         self.skip_details = skip_details if skip_details is not None else config.SKIP_DETAILS
+        # If title_keywords is None → use config defaults; if empty list → no title filter.
+        self.title_keywords = (
+            list(config.TITLE_KEYWORDS) if title_keywords is None else list(title_keywords)
+        )
+        self.extra_params = dict(extra_params or {})
 
         self.driver = self._init_driver()
         self.jobs: list[Job] = []
@@ -106,6 +113,9 @@ class LinkedInScraper:
             params["location"] = self.location
         if self.geo_id:
             params["geoId"] = self.geo_id
+        for k, v in self.extra_params.items():
+            if v is not None and v != "":
+                params[k] = str(v)
         return f"{self.BASE_URL}?{urlencode(params, quote_via=quote_plus)}"
 
     def _random_delay(self):
@@ -229,12 +239,16 @@ class LinkedInScraper:
 
             logger.info("Collected %d new cards (%d total unique so far).", new_count, len(all_cards))
 
-        # Pre-filter: only fetch details for jobs whose title looks relevant
-        title_keywords = [kw.lower() for kw in config.TITLE_KEYWORDS]
-        relevant_cards = [
-            c for c in all_cards
-            if any(kw in c["title"].lower() for kw in title_keywords)
-        ]
+        # Pre-filter: only fetch details for jobs whose title looks relevant.
+        # When title_keywords is empty, keep every card.
+        title_keywords = [kw.lower() for kw in self.title_keywords]
+        if title_keywords:
+            relevant_cards = [
+                c for c in all_cards
+                if any(kw in c["title"].lower() for kw in title_keywords)
+            ]
+        else:
+            relevant_cards = all_cards
         logger.info(
             "Total listing cards: %d. Title-matched: %d. Fetching descriptions…",
             len(all_cards), len(relevant_cards),

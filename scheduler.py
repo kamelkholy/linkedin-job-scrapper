@@ -30,6 +30,7 @@ except ImportError:  # < Py3.9 fallback
 
 import db
 from filters import filter_jobs
+from remote_scraper import RemoteJobScraper
 from scraper import Job, LinkedInScraper
 
 logger = logging.getLogger(__name__)
@@ -44,8 +45,10 @@ _scheduler: BackgroundScheduler | None = None
 _run_lock = threading.Lock()
 _state = {
     "running": False,
+    "kind": None,            # "linkedin" | "remote"
     "progress": "",
     "current_location": "",
+    "current_company": "",
     "started_at": None,
     "finished_at": None,
     "last_error": None,
@@ -90,8 +93,10 @@ def _do_run(progress_cb: Callable[[str], None] | None) -> dict:
     started_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
     _set_state(
         running=True,
+        kind="linkedin",
         progress="Starting daily scrape…",
         current_location="",
+        current_company="",
         started_at=started_at,
         finished_at=None,
         last_error=None,
@@ -177,6 +182,133 @@ def _do_run(progress_cb: Callable[[str], None] | None) -> dict:
     )
     logger.info(
         "=== Daily scrape finished — new=%d updated=%d seen=%d ===",
+        total_new, total_updated, total_seen,
+    )
+    return summary
+
+
+# ── Remote-jobs scrape ────────────────────────────────────────────────────
+
+def run_remote_scrape_now(
+    company_keys: list[str] | None = None,
+    max_pages: int = 2,
+    skip_details: bool = True,
+    progress_cb: Callable[[str], None] | None = None,
+) -> dict:
+    """Scrape remote jobs across the saved companies. Single-flight (shared lock).
+
+    Args:
+        company_keys: optional list of `company.key` values to limit the run.
+                      When None, scrapes every enabled company.
+    """
+    if not _run_lock.acquire(blocking=False):
+        raise RuntimeError("A scrape is already running.")
+    try:
+        return _do_remote_run(company_keys, max_pages, skip_details, progress_cb)
+    finally:
+        _run_lock.release()
+
+
+def _do_remote_run(
+    company_keys: list[str] | None,
+    max_pages: int,
+    skip_details: bool,
+    progress_cb: Callable[[str], None] | None,
+) -> dict:
+    all_companies = db.list_companies()
+    by_key = {c.get("key"): c for c in all_companies}
+    if company_keys:
+        targets = [by_key[k] for k in company_keys if k in by_key]
+    else:
+        targets = [c for c in all_companies if c.get("enabled", True)]
+
+    started_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    _set_state(
+        running=True,
+        kind="remote",
+        progress=f"Starting remote scrape across {len(targets)} company/companies…",
+        current_location="",
+        current_company="",
+        started_at=started_at,
+        finished_at=None,
+        last_error=None,
+        summary=None,
+    )
+    logger.info("=== Remote scrape started — %d company/companies ===", len(targets))
+
+    per_company: list[dict] = []
+    total_new = 0
+    total_updated = 0
+    total_seen = 0
+    error: str | None = None
+
+    try:
+        for idx, company in enumerate(targets, 1):
+            name = company.get("name") or company.get("slug") or "(unknown)"
+            slug = company.get("slug") or ""
+            msg = f"[{idx}/{len(targets)}] Scraping remote jobs at {name}…"
+            logger.info(msg)
+            _set_state(progress=msg, current_company=name)
+            if progress_cb:
+                progress_cb(msg)
+
+            scraper = RemoteJobScraper(
+                company_name=name,
+                company_slug=slug,
+                max_pages=max_pages,
+                skip_details=skip_details,
+            )
+            try:
+                raw_jobs: list[Job] = scraper.scrape()
+            finally:
+                scraper.close()
+
+            kept_dicts = [j.to_dict() for j in raw_jobs]
+            stats = db.upsert_jobs(kept_dicts, search_location="remote", source="remote")
+            per_company.append({
+                "company": name,
+                "scraped": len(raw_jobs),
+                **stats,
+            })
+            total_new += stats["new"]
+            total_updated += stats["updated"]
+            total_seen += stats["total_seen"]
+            logger.info(
+                "  %s — scraped=%d new=%d updated=%d",
+                name, len(raw_jobs), stats["new"], stats["updated"],
+            )
+    except Exception as exc:
+        logger.exception("Remote scrape failed: %s", exc)
+        error = str(exc)
+
+    finished_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    summary = {
+        "kind": "remote",
+        "started_at": started_at,
+        "finished_at": finished_at,
+        "companies": [c.get("name") for c in targets],
+        "per_company": per_company,
+        "new": total_new,
+        "updated": total_updated,
+        "seen": total_seen,
+        "error": error,
+    }
+    db.record_run(summary)
+
+    _set_state(
+        running=False,
+        progress=(
+            f"Done — {total_new} new, {total_updated} updated across "
+            f"{len(targets)} company/companies."
+            if not error else f"Error: {error}"
+        ),
+        current_company="",
+        finished_at=finished_at,
+        last_error=error,
+        summary=summary,
+    )
+    logger.info(
+        "=== Remote scrape finished — new=%d updated=%d seen=%d ===",
         total_new, total_updated, total_seen,
     )
     return summary

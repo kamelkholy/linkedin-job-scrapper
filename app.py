@@ -126,6 +126,7 @@ def get_jobs():
         status   — "active" (default) | "new" | "applied" | "dismissed" | "archived" | "all"
         search   — substring match on title/company/location
         location — substring match on location or search_locations
+        source   — "linkedin" | "remote" (omit for all sources)
         limit    — int
     """
     status = request.args.get("status", "active")
@@ -133,13 +134,18 @@ def get_jobs():
         status = None
     search = request.args.get("search") or None
     location = request.args.get("location") or None
+    source = request.args.get("source") or None
     limit = request.args.get("limit", type=int)
-    return jsonify(db.list_jobs(status=status, search=search, location=location, limit=limit))
+    return jsonify(db.list_jobs(
+        status=status, search=search, location=location,
+        limit=limit, source=source,
+    ))
 
 
 @app.get("/api/jobs/stats")
 def get_jobs_stats():
-    return jsonify(db.stats())
+    source = request.args.get("source") or None
+    return jsonify(db.stats(source=source))
 
 
 @app.post("/api/jobs/status")
@@ -315,12 +321,106 @@ def get_logs():
     return jsonify({"logs": all_logs[since:], "total": len(all_logs)})
 
 
+# ── Routes: companies (remote-jobs feature) ────────────────────────────────
+
+@app.get("/api/companies")
+def list_companies():
+    return jsonify(db.list_companies())
+
+
+@app.post("/api/companies")
+def add_company():
+    body = request.get_json(force=True, silent=True) or {}
+    name = (body.get("name") or "").strip()
+    slug = (body.get("slug") or "").strip()
+    linkedin_url = (body.get("linkedin_url") or "").strip()
+    if not name and not slug:
+        return jsonify({"ok": False, "error": "name or slug is required"}), 400
+    try:
+        company = db.add_company(name=name, slug=slug, linkedin_url=linkedin_url)
+    except ValueError as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 400
+    return jsonify({"ok": True, "company": company})
+
+
+@app.post("/api/companies/update")
+def update_company():
+    body = request.get_json(force=True, silent=True) or {}
+    key = (body.get("key") or "").strip()
+    if not key:
+        return jsonify({"ok": False, "error": "key is required"}), 400
+    patch = {k: v for k, v in body.items() if k in ("name", "slug", "linkedin_url", "enabled")}
+    company = db.update_company(key, patch)
+    if not company:
+        return jsonify({"ok": False, "error": "company not found"}), 404
+    return jsonify({"ok": True, "company": company})
+
+
+@app.post("/api/companies/delete")
+def delete_company():
+    body = request.get_json(force=True, silent=True) or {}
+    key = (body.get("key") or "").strip()
+    if not key:
+        return jsonify({"ok": False, "error": "key is required"}), 400
+    ok = db.remove_company(key)
+    return jsonify({"ok": ok})
+
+
+@app.post("/api/scrape/remote")
+def start_remote_scrape():
+    """Trigger a remote-jobs scrape across the saved companies.
+
+    Body (all optional):
+        { "company_keys": [str], "maxPages": int, "skipDetails": bool }
+
+    When ``company_keys`` is omitted, every enabled company is scraped.
+    """
+    if sched.get_state().get("running"):
+        return jsonify({"ok": False, "error": "A scrape is already running."}), 409
+
+    body = request.get_json(force=True, silent=True) or {}
+    company_keys = body.get("company_keys") or None
+    if company_keys is not None and not isinstance(company_keys, list):
+        return jsonify({"ok": False, "error": "company_keys must be a list"}), 400
+
+    max_pages = body.get("maxPages", 2)
+    try:
+        max_pages = int(max_pages)
+        if not (1 <= max_pages <= 20):
+            raise ValueError
+    except (ValueError, TypeError):
+        return jsonify({"ok": False, "error": "maxPages must be 1–20."}), 400
+    skip_details = bool(body.get("skipDetails", True))
+
+    if not db.list_companies():
+        return jsonify({"ok": False, "error": "No companies configured."}), 400
+
+    _clear_logs()
+
+    def _runner():
+        try:
+            sched.run_remote_scrape_now(
+                company_keys=company_keys,
+                max_pages=max_pages,
+                skip_details=skip_details,
+            )
+        except RuntimeError as exc:
+            logger.warning("Remote scrape skipped: %s", exc)
+        except Exception:
+            logger.exception("Remote scrape crashed.")
+
+    thread = threading.Thread(target=_runner, daemon=True)
+    thread.start()
+    return jsonify({"ok": True, "message": "Remote scrape started."})
+
+
 # ── Bootstrap ──────────────────────────────────────────────────────────────
 
 def _bootstrap() -> None:
     os.makedirs(config.OUTPUT_DIR, exist_ok=True)
     db.init_db()
     db.get_settings()  # seeds defaults if missing
+    db.seed_default_companies()  # idempotent — only on first launch
     legacy_path = os.path.join(config.OUTPUT_DIR, config.OUTPUT_JSON)
     db.migrate_legacy_json(legacy_path)
     sched.start_scheduler()

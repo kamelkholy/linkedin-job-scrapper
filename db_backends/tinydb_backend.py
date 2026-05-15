@@ -99,10 +99,12 @@ class TinyDBBackend:
 
         return {"new": new_count, "updated": updated_count, "total_seen": total}
 
-    def list_jobs(self, status, search, location, limit) -> list[dict]:
+    def list_jobs(self, status, search, location, limit, source=None) -> list[dict]:
         with self._lock:
             docs = self._db.table("jobs").all()
 
+        if source:
+            docs = [d for d in docs if (d.get("source") or "linkedin") == source]
         if status:
             if status == "active":
                 docs = [d for d in docs if d.get("status") not in ("dismissed", "archived")]
@@ -159,9 +161,11 @@ class TinyDBBackend:
             self._flush()
         return bool(removed)
 
-    def stats(self) -> dict:
+    def stats(self, source=None) -> dict:
         with self._lock:
             docs = self._db.table("jobs").all()
+        if source:
+            docs = [d for d in docs if (d.get("source") or "linkedin") == source]
         by_status: dict[str, int] = {}
         companies: set[str] = set()
         locations: set[str] = set()
@@ -207,3 +211,55 @@ class TinyDBBackend:
     def jobs_count(self) -> int:
         with self._lock:
             return len(self._db.table("jobs"))
+
+    # ── Companies (for remote-jobs feature) ─────────────────────────────
+
+    def list_companies(self) -> list[dict]:
+        with self._lock:
+            docs = list(self._db.table("companies").all())
+        docs.sort(key=lambda d: (d.get("name") or "").lower())
+        return docs
+
+    def add_company(self, doc: dict) -> dict:
+        Company = Query()
+        key = (doc.get("slug") or doc.get("name") or "").strip().lower()
+        if not key:
+            raise ValueError("company name is required")
+        with self._lock:
+            existing = self._db.table("companies").get(Company.key == key)
+            if existing:
+                merged = dict(existing)
+                merged.update({k: v for k, v in doc.items() if v not in (None, "")})
+                self._db.table("companies").update(merged, Company.key == key)
+                self._flush()
+                return merged
+            doc = dict(doc)
+            doc["key"] = key
+            doc.setdefault("enabled", True)
+            doc.setdefault("added_at", _utcnow())
+            self._db.table("companies").insert(doc)
+            self._flush()
+            return doc
+
+    def update_company(self, key: str, patch: dict) -> dict | None:
+        Company = Query()
+        with self._lock:
+            existing = self._db.table("companies").get(Company.key == key)
+            if not existing:
+                return None
+            merged = dict(existing)
+            merged.update(patch)
+            self._db.table("companies").update(merged, Company.key == key)
+            self._flush()
+            return merged
+
+    def remove_company(self, key: str) -> bool:
+        Company = Query()
+        with self._lock:
+            removed = self._db.table("companies").remove(Company.key == key)
+            self._flush()
+        return bool(removed)
+
+    def companies_count(self) -> int:
+        with self._lock:
+            return len(self._db.table("companies"))

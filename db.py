@@ -77,8 +77,9 @@ def upsert_jobs(jobs: Iterable[dict], search_location: str = "", source: str = "
 
 
 def list_jobs(status: str | None = None, search: str | None = None,
-              location: str | None = None, limit: int | None = None) -> list[dict]:
-    return _b().list_jobs(status, search, location, limit)
+              location: str | None = None, limit: int | None = None,
+              source: str | None = None) -> list[dict]:
+    return _b().list_jobs(status, search, location, limit, source=source)
 
 
 def get_job(url: str) -> dict | None:
@@ -102,8 +103,8 @@ def delete_job(url: str) -> bool:
     return _b().delete_job(url)
 
 
-def stats() -> dict:
-    return _b().stats()
+def stats(source: str | None = None) -> dict:
+    return _b().stats(source=source)
 
 
 # ── Settings ──────────────────────────────────────────────────────────────
@@ -190,3 +191,58 @@ def migrate_legacy_json(json_path: str) -> int:
     s = upsert_jobs(legacy, search_location="", source="linkedin")
     logger.info("Migrated %d legacy jobs into the DB.", s["new"])
     return s["new"]
+
+
+# ── Companies (remote-jobs feature) ───────────────────────────────
+
+def list_companies() -> list[dict]:
+    return _b().list_companies()
+
+
+def add_company(name: str, slug: str = "", linkedin_url: str = "", enabled: bool = True) -> dict:
+    name = (name or "").strip()
+    slug = (slug or "").strip().lower()
+    linkedin_url = (linkedin_url or "").strip()
+    if not name and not slug:
+        raise ValueError("company name or slug is required")
+    if not name and slug:
+        name = slug
+    doc = {
+        "name": name,
+        "slug": slug,
+        "linkedin_url": linkedin_url,
+        "enabled": bool(enabled),
+    }
+    return _b().add_company(doc)
+
+
+def update_company(key: str, patch: dict) -> dict | None:
+    allowed = {"name", "slug", "linkedin_url", "enabled"}
+    cleaned = {k: v for k, v in patch.items() if k in allowed}
+    if "slug" in cleaned and isinstance(cleaned["slug"], str):
+        cleaned["slug"] = cleaned["slug"].strip().lower()
+    return _b().update_company(key, cleaned)
+
+
+def remove_company(key: str) -> bool:
+    return _b().remove_company(key)
+
+
+def seed_default_companies() -> int:
+    """Populate the companies table with a curated remote-friendly list (idempotent)."""
+    if _b().companies_count() > 0:
+        return 0
+    from remote_companies import DEFAULT_REMOTE_COMPANIES
+    added = 0
+    for entry in DEFAULT_REMOTE_COMPANIES:
+        try:
+            add_company(
+                name=entry.get("name", ""),
+                slug=entry.get("slug", ""),
+                linkedin_url=entry.get("linkedin_url", ""),
+            )
+            added += 1
+        except Exception as exc:  # pragma: no cover
+            logger.warning("Failed to seed company %s: %s", entry, exc)
+    logger.info("Seeded %d default remote companies.", added)
+    return added
